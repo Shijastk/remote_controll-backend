@@ -5,12 +5,28 @@ const os = require('os');
 const { exec } = require('child_process');
 const qrcode = require('qrcode-terminal');
 
+const fs = require('fs');
+const path = require('path');
+
 const mouseHandler = require('./handlers/mouse.handler');
 const keyboardHandler = require('./handlers/keyboard.handler');
 const mediaHandler = require('./handlers/media.handler');
 const systemHandler = require('./handlers/system.handler');
 const screenHandler = require('./handlers/screen.handler');
 
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+
+function getOrGenerateID() {
+  if (fs.existsSync(CONFIG_PATH)) {
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    if (config.connectionId) return config.connectionId;
+  }
+  const newId = Math.floor(100000 + Math.random() * 900000).toString();
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ connectionId: newId }, null, 2));
+  return newId;
+}
+
+const CONNECTION_ID = getOrGenerateID();
 const PORT = 3001; 
 const TOKEN = 'remote123';
 
@@ -54,6 +70,31 @@ io.use((socket, next) => {
   else next(new Error('Unauthorized'));
 });
 
+function handleEvent(event, data, socket) {
+  switch (event) {
+    case 'mouse:move': mouseHandler.move(data); break;
+    case 'mouse:moveTo': mouseHandler.moveTo(data); break;
+    case 'mouse:click': mouseHandler.click(data); break;
+    case 'mouse:scroll': mouseHandler.scroll(data); break;
+    case 'mouse:press': mouseHandler.pressButton(data); break;
+    case 'mouse:release': mouseHandler.releaseButton(data); break;
+    case 'key:press': keyboardHandler.press(data); break;
+    case 'key:type': keyboardHandler.type(data); break;
+    case 'key:combo': keyboardHandler.combo(data); break;
+    case 'media:control': mediaHandler.control(data); break;
+    case 'media:volume': 
+      mediaHandler.volume(data).then(v => socket.emit('volume:level', v));
+      break;
+    case 'system:command': systemHandler.execute(data); break;
+    case 'screen:start': screenHandler.startStream(socket); break; 
+    case 'screen:stop': screenHandler.stopStream(socket); break;
+    case 'screen:getSize':
+      screenHandler.getScreenSize().then(size => socket.emit('screen:size', size));
+      break;
+  }
+}
+
+// --- SOCKET SERVER ---
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
   
@@ -61,34 +102,14 @@ io.on('connection', (socket) => {
   mediaHandler.getVolume().then(v => socket.emit('volume:level', v));
   screenHandler.getScreenSize().then(size => socket.emit('screen:size', size));
 
-  // Forward events to handlers
-  socket.on('mouse:move', (data) => mouseHandler.move(data));
-  socket.on('mouse:moveTo', (data) => {
-    console.log('Mouse moveTo:', data);
-    mouseHandler.moveTo(data);
-  });
-  socket.on('mouse:click', (data) => mouseHandler.click(data));
-  socket.on('mouse:scroll', (data) => mouseHandler.scroll(data));
-  socket.on('mouse:doubleclick', () => mouseHandler.doubleclick());
-  socket.on('mouse:press', (data) => mouseHandler.pressButton(data));
-  socket.on('mouse:release', (data) => mouseHandler.releaseButton(data));
+  const events = [
+    'mouse:move', 'mouse:moveTo', 'mouse:click', 'mouse:scroll', 'mouse:doubleclick', 
+    'mouse:press', 'mouse:release', 'key:press', 'key:type', 'key:combo', 
+    'media:control', 'media:volume', 'system:command', 'screen:start', 'screen:stop', 'screen:getSize'
+  ];
 
-  socket.on('key:press', (data) => keyboardHandler.press(data));
-  socket.on('key:type', (data) => keyboardHandler.type(data));
-  socket.on('key:combo', (data) => keyboardHandler.combo(data));
-
-  socket.on('media:control', (data) => mediaHandler.control(data));
-  socket.on('media:volume', async (data) => {
-    const v = await mediaHandler.volume(data);
-    io.emit('volume:level', v);
-  });
-
-  socket.on('system:command', (data) => systemHandler.execute(data));
-
-  socket.on('screen:start', () => screenHandler.startStream(socket));
-  socket.on('screen:stop', () => screenHandler.stopStream(socket));
-  socket.on('screen:getSize', () => {
-    screenHandler.getScreenSize().then(size => socket.emit('screen:size', size));
+  events.forEach(event => {
+    socket.on(event, (data) => handleEvent(event, data, socket));
   });
 
   socket.on('ping', () => socket.emit('pong'));
@@ -101,6 +122,13 @@ io.on('connection', (socket) => {
 server.listen(PORT, () => {
   const ip = getLocalIP();
   const url = `http://${ip}:${PORT}?token=${TOKEN}`;
-  console.log(`\nServer active at: ${url}`);
+  
+  console.log('\n' + '='.repeat(40));
+  console.log('🚀 PC REMOTE PRIVACY AGENT ONLINE');
+  console.log('='.repeat(40));
+  console.log(`\n📍 LOCAL IP (Use on Website):  ${ip}`);
+  console.log(`\n🔗 FULL ACCESS URL: ${url}`);
+  console.log('='.repeat(40) + '\n');
+  
   qrcode.generate(url, { small: true });
 });

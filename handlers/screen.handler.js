@@ -22,10 +22,10 @@ async function getScreenSize() {
   return { width: 1920, height: 1080 };
 }
 
-function startStream(socket) {
+function startStream(socket, connectionId = null) {
   stopStream(socket);
 
-  console.log(`Starting screen stream with cursor for socket ${socket.id}`);
+  console.log(`Starting screen stream for socket ${socket.id} (Relay: ${!!connectionId})`);
   
   const interval = setInterval(async () => {
     if (!socket.connected) {
@@ -47,18 +47,24 @@ function startStream(socket) {
       const buffer = await sharp(img)
         .composite([{
           input: cursorSvg,
-          top: Math.round((pos.y / screenSize.height) * (await sharp(img).metadata()).height),
-          left: Math.round((pos.x / screenSize.width) * (await sharp(img).metadata()).width)
+          top: Math.max(0, Math.round((pos.y / screenSize.height) * (await sharp(img).metadata()).height)),
+          left: Math.max(0, Math.round((pos.x / screenSize.width) * (await sharp(img).metadata()).width))
         }])
         .resize(800)
         .jpeg({ quality: 60 })
         .toBuffer();
 
-      socket.emit('screen:frame', { frame: buffer.toString('base64') });
+      const frameData = { frame: buffer.toString('base64') };
+      
+      if (connectionId) {
+        socket.emit('relay', { connectionId, event: 'screen:frame', data: frameData });
+      } else {
+        socket.emit('screen:frame', frameData);
+      }
     } catch (e) {
       console.error('Screen capture error:', e.message);
     }
-  }, 200);
+  }, 250); // Slightly slower for cloud stability
 
   streams.set(socket.id, interval);
 }
