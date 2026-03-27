@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const os = require('os');
 const { exec } = require('child_process');
 const qrcode = require('qrcode-terminal');
+const { io: ioClient } = require('socket.io-client');
 
 const fs = require('fs');
 const path = require('path');
@@ -29,6 +30,7 @@ function getOrGenerateID() {
 const CONNECTION_ID = getOrGenerateID();
 const PORT = 3001; 
 const TOKEN = 'remote123';
+const RELAY_URL = process.env.RELAY_URL || 'http://localhost:3002';
 
 const app = express();
 const server = http.createServer(app);
@@ -38,6 +40,15 @@ const io = new Server(server, {
 
 // Serve empty dashboard or stats if needed
 app.get('/', (req, res) => res.send('Remote Control Server Running'));
+app.get('/status', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({
+    ip: getLocalIP(),
+    port: PORT,
+    token: TOKEN,
+    connectionId: CONNECTION_ID
+  });
+});
 
 function getLocalIP() {
   const nets = os.networkInterfaces();
@@ -76,6 +87,7 @@ function handleEvent(event, data, socket) {
     case 'mouse:moveTo': mouseHandler.moveTo(data); break;
     case 'mouse:click': mouseHandler.click(data); break;
     case 'mouse:scroll': mouseHandler.scroll(data); break;
+    case 'mouse:doubleclick': mouseHandler.doubleclick(data); break;
     case 'mouse:press': mouseHandler.pressButton(data); break;
     case 'mouse:release': mouseHandler.releaseButton(data); break;
     case 'key:press': keyboardHandler.press(data); break;
@@ -121,14 +133,41 @@ io.on('connection', (socket) => {
 
 server.listen(PORT, () => {
   const ip = getLocalIP();
-  const url = `http://${ip}:${PORT}?token=${TOKEN}`;
+  const backendUrl = `http://${ip}:${PORT}?token=${TOKEN}`;
+  const frontendUrl = `http://${ip}:5173?ip=${ip}&token=${TOKEN}`;
   
   console.log('\n' + '='.repeat(40));
   console.log('🚀 PC REMOTE PRIVACY AGENT ONLINE');
   console.log('='.repeat(40));
   console.log(`\n📍 LOCAL IP (Use on Website):  ${ip}`);
-  console.log(`\n🔗 FULL ACCESS URL: ${url}`);
+  console.log(`\n🔗 BACKEND ACCESS: ${backendUrl}`);
+  console.log(`\n📱 SCAN TO CONNECT (Mobile): ${frontendUrl}`);
   console.log('='.repeat(40) + '\n');
   
-  qrcode.generate(url, { small: true });
+  qrcode.generate(frontendUrl, { small: true });
+});
+
+// --- CLOUD RELAY AGENT ---
+const relaySocket = ioClient(RELAY_URL, {
+  transports: ['websocket'],
+  reconnection: true
+});
+
+relaySocket.on('connect', () => {
+  console.log(`✅ Connected to Cloud Relay as Agent: ${CONNECTION_ID}`);
+  relaySocket.emit('agent:register', { connectionId: CONNECTION_ID });
+});
+
+relaySocket.on('command', ({ event, data }) => {
+  console.log(`☁️  Relay Command: ${event}`);
+  // Create a proxy socket that relays responses back through the cloud
+  const proxySocket = {
+    id: relaySocket.id,
+    emit: (e, d) => relaySocket.emit('relay', { connectionId: CONNECTION_ID, event: e, data: d })
+  };
+  handleEvent(event, data, proxySocket);
+});
+
+relaySocket.on('connect_error', (err) => {
+  console.log('❌ Relay Connection Error:', err.message);
 });
